@@ -3,7 +3,7 @@
 //! Verifies SP1 Groth16 proofs on Solana using the BN254 `alt_bn128` syscalls,
 //! via [`groth16-solana`](https://github.com/Lightprotocol/groth16-solana).
 //!
-//! Supports SP1 circuit version **v6.1.0** (shipped by `sp1-sdk` 6.5.x). One
+//! Supports SP1 circuit version **v6.1.0** (shipped by `sp1-sdk` 6.5.0 through 6.7.0). One
 //! crate version is bound to one circuit version: the Groth16 verifying key
 //! and the recursion vk root are compiled in as constants.
 //!
@@ -29,7 +29,7 @@
 //!
 //! let proof = SP1ProofWithPublicValues::load("../proofs/fibonacci_proof.bin").unwrap();
 //! // `vk.bytes32()` from `ProverClient::setup(ELF)`.
-//! let vkey_hash = "0x00ec3493b0058cc7b829ecce6e560e990f2eb8b78b55a0e0bc73ba89eb7a4ec7";
+//! let vkey_hash = "0x00e8dad83fa005b8aae28d5699cc5be3174e6ef947cf17ecf11ff38cac809dbc";
 //! verify_proof(&proof.bytes(), proof.public_values.as_slice(), vkey_hash).unwrap();
 //! ```
 
@@ -58,7 +58,7 @@ pub const SP1_GROTH16_PROOF_LEN: usize = VK_HASH_PREFIX_LEN + 32 * 3 + GROTH16_P
 
 /// Merkle root of the SP1 recursion verifying keys for circuit `v6.1.0`.
 ///
-/// Copied from `sp1-verifier` at tag `v6.5.0` (`VK_ROOT_BYTES`). Every proof for
+/// Copied from `sp1-verifier` (`VK_ROOT_BYTES`; identical at tags v6.5.0 and v6.7.0). Every proof for
 /// this circuit version commits to this root as its 4th public input; a
 /// different root means the proof came from another SP1 release.
 pub const VK_ROOT_BYTES: [u8; 32] = [

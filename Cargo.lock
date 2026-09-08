@@ -6053,9 +6053,9 @@ dependencies = [
 
 [[package]]
 name = "sp1-build"
-version = "6.5.0"
+version = "6.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fe75bbd4a0b0d4b0eac828605ace6ffaa13749927986dcb41225d1691367c30"
+checksum = "f70d47454cc2956b3267945be0a32c2b6410dcce7c1d1ce2aa756e7e29d42d05"
 dependencies = [
  "anyhow",
  "cargo_metadata",
@@ -6551,24 +6551,21 @@ dependencies = [
 
 [[package]]
 name = "sp1-sdk"
-version = "6.5.0"
+version = "6.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c96c7664a929f15691a237d724929f41c024d9e6c07fe0a0d4c98c83c0318ae8"
+checksum = "bbc1af2ef42217ae51da78da681bee86ba6f276d9416c7d4d5fc31c1b5190c2e"
 dependencies = [
  "anyhow",
  "async-trait",
  "bincode",
  "cfg-if",
- "dirs",
  "eventsource-stream",
  "futures",
  "hex",
- "indicatif 0.17.11",
  "itertools 0.14.0",
  "k256",
  "num-bigint 0.4.8",
  "serde",
- "sha2 0.10.9",
  "sp1-build",
  "sp1-core-executor",
  "sp1-core-executor-runner",
@@ -6580,7 +6577,6 @@ dependencies = [
  "sp1-prover-types",
  "sp1-recursion-executor",
  "sp1-verifier",
- "strum",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -6630,16 +6626,15 @@ dependencies = [
 
 [[package]]
 name = "sp1-zkvm"
-version = "6.5.0"
+version = "6.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42cc93258734c2540fb7d0ba48ba4d0c9f1b10078b18e60ea60fe63e7088666d"
+checksum = "fb999e00c34c4cac214497e697265e83fa75d512b95db1a60b30c98ad2e18558"
 dependencies = [
  "cfg-if",
  "critical-section",
  "embedded-alloc",
  "getrandom 0.2.17",
  "getrandom 0.3.4",
- "lazy_static",
  "libm",
  "rand 0.8.8",
  "sha2 0.10.9",

@@ -11,7 +11,7 @@ BN254 `alt_bn128` syscalls, via Light Protocol's
 
 | Component | Version | Notes |
 |---|---|---|
-| SP1 | `sp1-sdk` / `sp1-zkvm` / `sp1-build` **=6.5.0** | Circuit version **v6.1.0**. Pinned exactly; `6.x` semver would resolve to a newer SDK. The v6 SDK is async; the example uses `#[tokio::main]`. |
+| SP1 | `sp1-sdk` / `sp1-zkvm` / `sp1-build` **=6.7.0** | Circuit version **v6.1.0** (unchanged since 6.5.0: same `groth16_vk.bin`, same `VK_ROOT_BYTES`). Pinned exactly so the Docker build image tag and `sp1-gpu-server` match. The v6 SDK is async; the example uses `#[tokio::main]`. |
 | groth16-solana | git `43fee1a` | Unreleased master. crates.io 0.2.0 lacks `negate_g1_be`, `vk_commitment`, pinocchio syscalls. |
 | Solana crates | Agave 3.x (`solana-program 3.0`, RPC client 3.1) | |
 | Solana CLI / platform-tools | Agave 4.2 / v1.54 | Anything ≥ 2.x that has the `alt_bn128` syscalls works. |
@@ -98,7 +98,7 @@ Follow [Install Dependencies](https://solana.com/docs/intro/installation/depende
 Rust, the Solana CLI, and Surfpool, then:
 
 ```shell
-curl -L https://sp1up.succinct.xyz | bash && sp1up --version v6.5.0   # cargo prove + succinct toolchain
+curl -L https://sp1up.succinct.xyz | bash && sp1up --version v6.7.0   # cargo prove + succinct toolchain
 ```
 
 Proving locally also needs **Docker**: SP1 runs its gnark Groth16 wrapper in
@@ -150,7 +150,7 @@ RUST_LOG=info cargo run --release -- --prove --program-id <PROGRAM_ID>
 ```
 
 `build.rs` compiles `example/sp1-program` to a RISC-V ELF **inside SP1's Docker image**
-(`ghcr.io/succinctlabs/sp1:v6.5.0`). This is the reproducible build: pinned toolchain, fixed
+(`ghcr.io/succinctlabs/sp1:v6.7.0`, tag = `sp1-build` version). This is the reproducible build: pinned toolchain, fixed
 mount path, trimmed source paths, so every machine gets the same ELF bytes and the same guest
 vkey. A native build (`SP1_BUILD_NATIVE=1`, uses your local `cargo prove`) embeds host paths and
 yields a different vkey per machine.

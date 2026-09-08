@@ -41,9 +41,9 @@ sha2 = "0.10.8"
 hex = { version = "0.4.3", default-features = false }
 thiserror = { version = "2", default-features = false }
 
-# sp1 — 6.5.x ships circuit version v6.1.0 (see verifier/vk/v6.1.0).
-# Pinned exactly: 6.7.0 needs tempfile ≥3.20's TempDir::keep, and semver
-# resolution would otherwise drift onto it.
-sp1-sdk = "=6.5.0"
-sp1-zkvm = "=6.5.0"
-sp1-build = "=6.5.0"
+# sp1 — 6.7.x ships circuit version v6.1.0 (see verifier/vk/v6.1.0).
+# Pinned exactly so the lockfile, the Docker build image tag (v<version>) and
+# sp1-gpu-server all agree on one version.
+sp1-sdk = "=6.7.0"
+sp1-zkvm = "=6.7.0"
+sp1-build = "=6.7.0"

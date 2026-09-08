@@ -19,7 +19,7 @@ solana_program::entrypoint!(process_instruction);
 /// `example/script --prove`; the script also asserts it matches this constant
 /// so a rebuilt guest can't silently drift from the on-chain expectation.
 pub const FIBONACCI_VKEY_HASH: &str =
-    "0x00ec3493b0058cc7b829ecce6e560e990f2eb8b78b55a0e0bc73ba89eb7a4ec7";
+    "0x00e8dad83fa005b8aae28d5699cc5be3174e6ef947cf17ecf11ff38cac809dbc";
 
 /// The instruction data for the program.
 #[derive(BorshDeserialize, BorshSerialize, Debug, Clone)]
