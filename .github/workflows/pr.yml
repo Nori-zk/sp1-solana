@@ -1,9 +1,12 @@
 name: PR
 
+# Runs on pull requests and on demand (Actions tab → "PR" → Run workflow).
+# No push trigger: the repo is public so minutes are free, but the verifier
+# job compiles the sp1-sdk tree (~10 min cold) and there is no reason to pay
+# that on every push to master.
 on:
-  push:
-    branches: [master]
   pull_request:
+  workflow_dispatch:
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
