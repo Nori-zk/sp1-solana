@@ -54,7 +54,7 @@ fail before any syscall is spent.
 use sp1_solana::{verify_proof, verify_proof_with_exit_code, verify_proof_with_hash, PublicValuesHash, Error};
 
 // Guest exited with code 0, public values committed with sha256 (sp1_zkvm::io::commit).
-verify_proof(&proof_bytes, &public_values, "0x00bb9e57…")?;
+verify_proof(&proof_bytes, &public_values, "0x00e8dad8…")?;
 
 // Guest exited with a specific non-zero code (a proven panic).
 verify_proof_with_exit_code(&proof_bytes, &public_values, vkey_hash, expected_exit_code)?;

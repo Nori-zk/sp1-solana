@@ -2,9 +2,13 @@
 //! the Groth16 proof to the deployed verifier program on a local Solana RPC
 //! (Surfpool by default) and report compute units.
 //!
-//! Prerequisites for `--prove`: Docker (SP1 runs its gnark Groth16 wrapper in
-//! `succinctlabs/sp1-gnark`), and ~6 GB of circuit artifacts which SP1 downloads
+//! Docker is required: `build.rs` compiles the guest in `ghcr.io/succinctlabs/sp1`
+//! for a reproducible ELF/vkey, and `--prove` runs the gnark Groth16 wrapper in
+//! `succinctlabs/sp1-gnark`. `--prove` also downloads ~6 GB of circuit artifacts
 //! to `~/.sp1/circuits/groth16/<version>` on first use.
+//!
+//! Exit codes: 2 = guest vkey != FIBONACCI_VKEY_HASH, 3 = deployed program stale,
+//! 4 = proof file does not verify against FIBONACCI_VKEY_HASH. Each prints the fix.
 //!
 //! Prover selection is by environment, unchanged from the SP1 SDK:
 //!   SP1_PROVER=cpu      (default) local CPU prover

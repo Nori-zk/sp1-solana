@@ -15,9 +15,11 @@ use sp1_solana::{verify_proof, Error};
 #[cfg(not(feature = "no-entrypoint"))]
 solana_program::entrypoint!(process_instruction);
 
-/// `vk.bytes32()` of the fibonacci guest program. Printed by
-/// `example/script --prove`; the script also asserts it matches this constant
-/// so a rebuilt guest can't silently drift from the on-chain expectation.
+/// `vk.bytes32()` of the fibonacci guest program, built reproducibly in the
+/// `ghcr.io/succinctlabs/sp1:v6.7.0` image (see `example/script/build.rs`).
+/// Changes whenever the guest source or the build image changes. The script
+/// checks the freshly built ELF, the proof, and the deployed `.so` against
+/// this constant before sending anything, and prints the new value to paste.
 pub const FIBONACCI_VKEY_HASH: &str =
     "0x00e8dad83fa005b8aae28d5699cc5be3174e6ef947cf17ecf11ff38cac809dbc";
 
