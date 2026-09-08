@@ -7,38 +7,50 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
-  
 
 jobs:
-  unit-test:
-    name: Unit Test
-    runs-on: [runs-on, runner=8cpu-linux-x64, "run-id=${{ github.run_id }}"]
+  verifier:
+    name: Verifier unit tests
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Run tests
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install SP1 toolchain (needed by example/script build.rs, a workspace member)
         run: |
-          cd verifier
-          cargo test --package sp1-solana --lib -- test --show-output 
+          curl -L https://sp1up.succinct.xyz | bash
+          ~/.sp1/bin/sp1up --version v6.5.0
+      - name: Test
+        run: cargo test -p sp1-solana --lib
+      - name: Clippy
+        run: cargo clippy -p sp1-solana -p fibonacci-verifier-contract -- -D warnings
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+  sbf:
+    name: Build Solana program
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+      - name: cargo build-sbf
+        run: cargo build-sbf --manifest-path example/program/Cargo.toml
+      - name: No feature-gated syscalls referenced
+        run: |
+          readelf=$(find ~/.cache/solana -name llvm-readelf | head -1)
+          syms=$($readelf --dyn-syms target/deploy/fibonacci_verifier_contract.so | grep -o 'sol_[a-z0-9_]*' | sort -u)
+          echo "$syms"
+          if echo "$syms" | grep -q sol_blake3; then echo "sol_blake3 is feature-gated and inactive on all clusters"; exit 1; fi
 
   lock-files:
-    name: "Check lock files"
-    runs-on: ["runs-on", "runner=8cpu-linux-x64", "run-id=${{ github.run_id }}"]
-    env:
-      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    name: Check lock file
+    runs-on: ubuntu-latest
     steps:
-      - name: "Checkout sources"
-        uses: "actions/checkout@v4"
-
-      - name: "Update lock files"
-        run: |
-          cargo tree
-          (cd ./example/sp1-program && cargo tree)
-
-      - name: "Assert no changes"
-        run: |
-          if [ -n "$(git status --porcelain)" ]; then 
-            echo "Lock files not up to date"
-            exit 1
-          fi
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo metadata --locked --format-version 1 > /dev/null

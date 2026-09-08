@@ -130,7 +130,16 @@ cargo run --release -- --program-id <PROGRAM_ID>
 
 The script loads `proofs/fibonacci_proof.bin`, verifies it host-side with the same
 `sp1_solana::verify_proof` the program calls, then sends it as instruction data and prints the
-program logs and compute units consumed.
+program logs and compute units consumed. Expected output ends with:
+
+```text
+  log: Program log: Proof verified. Public values: (n: 20, a: 6765, b: 3027)
+  log: Program <PROGRAM_ID> consumed 98353 of 399850 compute units
+compute units consumed: 98503
+```
+
+For reference, `groth16-solana` measures ~95k CU for a bare 5-input Groth16 verify; the SP1
+wrapper (borsh, header checks, `sol_sha256`, logging) adds ~3k.
 
 ### 3. Generate a fresh proof
 
@@ -146,11 +155,33 @@ guest, update that constant and redeploy.
 
 Prover selection is by environment, as in the SP1 SDK:
 
-| `SP1_PROVER` | Backend |
-|---|---|
-| `cpu` (default) | local CPU |
-| `cuda` | local GPU; needs the `cuda` feature on `sp1-sdk` and the NVIDIA container runtime |
-| `network` | Succinct Prover Network; needs `NETWORK_PRIVATE_KEY` |
+| `SP1_PROVER` | Backend | Build flag |
+|---|---|---|
+| `cpu` (default) | local CPU. Add `RUSTFLAGS="-C target-cpu=native"` for AVX2 (`+avx512f` for AVX-512). | — |
+| `cuda` | local NVIDIA GPU | `--features cuda` |
+| `network` | Succinct Prover Network; needs `NETWORK_PRIVATE_KEY` | — |
+
+Measured on this repo's CPU run (56 cores, no AVX flags): STARK stages ≈ 3.5 min, gnark wrap
+≈ 75 s, plus a one-time 6 GB artifact download.
+
+### GPU proving
+
+Requirements ([SP1 docs](https://docs.succinct.xyz/docs/sp1/generating-proofs/hardware-acceleration)):
+Linux x86_64, NVIDIA driver + CUDA 12 runtime, GPU with compute capability ≥ 8.0 (RTX 30/40
+series, A100, H100), 24 GB VRAM recommended. **Docker is not needed for the GPU prover** as of
+SP1 v6: the SDK downloads a native `sp1-gpu-server` binary (~130 MB, from the SP1 GitHub release
+matching the SDK version) to `~/.sp1/bin/` and starts it itself, talking over
+`/tmp/sp1-cuda-<device>.sock`. Docker is still used for the gnark Groth16 wrap.
+
+```shell
+nvidia-smi                                   # driver visible, compute capability ≥ 8.0
+cd example/script
+SP1_PROVER=cuda cargo run --release --features cuda -- --prove --program-id <PROGRAM_ID>
+```
+
+The script refuses to run with `SP1_PROVER=cuda` if the binary was built without the feature.
+To pick a GPU other than device 0, use `ProverClient::builder().cuda().with_device_id(n)` instead
+of `from_env()`.
 
 > [!NOTE]
 > The proof and public values are passed as instruction data. A transaction is limited to

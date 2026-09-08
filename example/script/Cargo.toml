@@ -25,5 +25,13 @@ borsh.workspace = true
 clap = { version = "4.0", features = ["derive"] }
 sp1-sdk.workspace = true
 
+[features]
+default = []
+# GPU proving. Build with `--features cuda`, run with `SP1_PROVER=cuda`.
+# Needs Linux x86_64, an NVIDIA driver + CUDA 12 runtime, compute capability >= 8.0.
+# The SDK downloads `sp1-gpu-server` to ~/.sp1/bin on first use; Docker is not
+# involved in the GPU path (it is still used for the gnark Groth16 wrap).
+cuda = ["sp1-sdk/cuda"]
+
 [build-dependencies]
 sp1-build.workspace = true

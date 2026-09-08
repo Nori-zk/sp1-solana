@@ -8,13 +8,17 @@
 //!
 //! Prover selection is by environment, unchanged from the SP1 SDK:
 //!   SP1_PROVER=cpu      (default) local CPU prover
-//!   SP1_PROVER=cuda     local GPU prover (needs the `cuda` sdk feature + Docker + NVIDIA runtime)
+//!   SP1_PROVER=cuda     local GPU prover; build this crate with `--features cuda`.
+//!                       Needs an NVIDIA driver + CUDA 12; the SDK downloads and runs
+//!                       `sp1-gpu-server` (~/.sp1/bin) itself. No Docker on this path.
 //!   SP1_PROVER=network  Succinct Prover Network (needs NETWORK_PRIVATE_KEY)
 //!
 //! Usage:
-//!   surfpool start --no-deploy &          # local Surfnet on :8899
-//!   solana program deploy ../../target/deploy/fibonacci_verifier_contract.so
+//!   surfpool start --no-tui --no-deploy --offline --airdrop-keypair-path ~/.config/solana/id.json
+//!   solana program deploy ../../target/deploy/fibonacci_verifier_contract.so \
+//!       --program-id ../../target/deploy/fibonacci_verifier_contract-keypair.json
 //!   cargo run --release -- --program-id <PUBKEY> [--prove] [--rpc-url http://127.0.0.1:8899]
+//!   SP1_PROVER=cuda cargo run --release --features cuda -- --prove --program-id <PUBKEY>
 
 use std::{path::PathBuf, str::FromStr};
 
@@ -82,6 +86,12 @@ fn default_keypair_path() -> PathBuf {
 }
 
 fn prove(args: &Cli) -> SP1ProofWithPublicValues {
+    let backend = std::env::var("SP1_PROVER").unwrap_or_else(|_| "cpu".into());
+    if backend == "cuda" && !cfg!(feature = "cuda") {
+        panic!("SP1_PROVER=cuda but this binary was built without `--features cuda`");
+    }
+    println!("prover backend: {backend}");
+
     // `blocking` facade over the async v6 SDK; picks cpu/cuda/network from SP1_PROVER.
     let client = ProverClient::from_env();
     let pk = client.setup(ELF).expect("setup");
