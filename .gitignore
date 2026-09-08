@@ -19,3 +19,6 @@ NOTES.local.md
 
 # surfpool runtime state
 .surfpool/
+
+# local PR draft
+.github/PR_BODY.md
