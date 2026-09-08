@@ -1,28 +1,36 @@
 [package]
 name = "sp1-solana"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Bhargav Annem, Yuwen Zhang"]
 description = "Verifier for SP1 Groth16 proofs on Solana"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/succinctlabs/groth16-solana"
+repository = "https://github.com/succinctlabs/sp1-solana"
 readme = "../README.md"
 keywords = ["cryptography", "zero-knowledge", "groth16", "verifier"]
 categories = ["cryptography"]
 
-[dependencies]
-num-bigint.workspace = true
-sha2.workspace = true
-groth16-solana.workspace = true
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ['cfg(target_os, values("solana"))']
 
-ark-bn254 = "0.4.0"
-ark-serialize = "0.4.2"
-ark-ff = "0.4.2"
-thiserror = "1.0.63"
-hex = "0.4.3"
+[dependencies]
+groth16-solana.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+
+# Hashing of SP1 public values. On the SBF target these resolve to the
+# `sol_sha256` / `sol_blake3` syscalls; on the host they need the pure-Rust
+# backends, which the `sha2` / `blake3` features below enable.
+solana-sha256-hasher.workspace = true
+solana-blake3-hasher.workspace = true
+
+[target.'cfg(not(target_os = "solana"))'.dependencies]
+solana-sha256-hasher = { workspace = true, features = ["sha2"] }
+solana-blake3-hasher = { workspace = true, features = ["blake3"] }
+# Host-only: `vkgen` (gnark-compressed .bin → Rust const) and the `gen_vk` example.
+sha2.workspace = true
 
 [dev-dependencies]
 sp1-sdk = { workspace = true }
-sp1-zkvm = { workspace = true }
-hex-literal = "0.3.1"
-num-traits = { version = "0.2.19" }
+hex-literal = "0.4"
