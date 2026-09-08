@@ -149,10 +149,26 @@ cd example/script
 RUST_LOG=info cargo run --release -- --prove --program-id <PROGRAM_ID>
 ```
 
-`build.rs` compiles `example/sp1-program` to a RISC-V ELF with `cargo prove` (`SP1_BUILD_DOCKER=1`
-builds it in SP1's reproducible Docker image instead). The script asserts the guest's
-`vk.bytes32()` equals `FIBONACCI_VKEY_HASH` in `example/program/src/lib.rs`; if you change the
-guest, update that constant and redeploy.
+`build.rs` compiles `example/sp1-program` to a RISC-V ELF **inside SP1's Docker image**
+(`ghcr.io/succinctlabs/sp1:v6.5.0`). This is the reproducible build: pinned toolchain, fixed
+mount path, trimmed source paths, so every machine gets the same ELF bytes and the same guest
+vkey. A native build (`SP1_BUILD_NATIVE=1`, uses your local `cargo prove`) embeds host paths and
+yields a different vkey per machine.
+
+The guest vkey is hard-coded in the program as `FIBONACCI_VKEY_HASH`. Three things must agree:
+the ELF the script proves, the constant compiled into the `.so`, and the `.so` actually deployed.
+The script checks both before spending a proof or a transaction:
+
+| Check | Failure | What it prints |
+|---|---|---|
+| ELF vkey == `FIBONACCI_VKEY_HASH` | exit 2 | the new constant, ready to paste, plus the build-sbf/deploy commands |
+| deployed `.so` contains `FIBONACCI_VKEY_HASH` | exit 3 | "deployed program is stale", plus the build-sbf/deploy commands |
+
+Without the second check a stale deployment fails on-chain as `custom program error: 0x7`
+(`ProofVerificationFailed`): the pairing runs against the old vkey.
+
+If you change the guest source: run the script, paste the printed constant into
+`example/program/src/lib.rs`, `cargo build-sbf`, `solana program deploy`, run again.
 
 Prover selection is by environment, as in the SP1 SDK:
 
@@ -184,8 +200,7 @@ The script refuses to run with `SP1_PROVER=cuda` if the binary was built without
 To pick a GPU other than device 0, use `ProverClient::builder().cuda().with_device_id(n)` instead
 of `from_env()`.
 
-Verified on an RTX-class desktop: `proved fib(20) in 309.9s` (includes the gnark wrap in Docker and,
-on a first run, the artifact download). The CUDA client keeps a socket to `sp1-gpu-server` whose
+Verified on an RTX-class desktop: `proved fib(20) in 38.7s` with warm artifacts. CPU on 56 cores, warm: 274.6 s. The CUDA client keeps a socket to `sp1-gpu-server` whose
 `Drop` uses `tokio::spawn`; the prover client must therefore be created and dropped inside a tokio
 runtime. Do not wrap it with `sp1_sdk::blocking` — that facade runs each call on a temporary
 runtime and the client is dropped outside it, which aborts the process at the end of proving

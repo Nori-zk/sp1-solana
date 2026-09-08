@@ -101,10 +101,25 @@ async fn prove(args: &Cli) -> SP1ProofWithPublicValues {
 
     let vkey_hash = pk.verifying_key().bytes32();
     println!("guest vkey hash: {vkey_hash}");
-    assert_eq!(
-        vkey_hash, FIBONACCI_VKEY_HASH,
-        "guest ELF changed: update FIBONACCI_VKEY_HASH in example/program/src/lib.rs"
-    );
+    if vkey_hash != FIBONACCI_VKEY_HASH {
+        eprintln!(
+            "\nguest vkey hash differs from FIBONACCI_VKEY_HASH in example/program/src/lib.rs\n\
+             \x20 expected  {FIBONACCI_VKEY_HASH}\n\
+             \x20 got       {vkey_hash}\n\
+             \n\
+             The guest ELF was rebuilt with a different toolchain or build mode (native vs\n\
+             Docker). If the new ELF is the one you want, paste this into example/program/src/lib.rs:\n\
+             \n\
+             pub const FIBONACCI_VKEY_HASH: &str =\n\
+             \x20   \"{vkey_hash}\";\n\
+             \n\
+             then rebuild and redeploy the program before re-running:\n\
+             \x20 cargo build-sbf --manifest-path example/program/Cargo.toml\n\
+             \x20 solana program deploy target/deploy/fibonacci_verifier_contract.so \\\n\
+             \x20     --program-id target/deploy/fibonacci_verifier_contract-keypair.json\n"
+        );
+        std::process::exit(2);
+    }
 
     let mut stdin = SP1Stdin::new();
     stdin.write(&args.n);
@@ -125,8 +140,61 @@ async fn prove(args: &Cli) -> SP1ProofWithPublicValues {
     proof
 }
 
+/// Fetch the deployed program's ELF and check it was built with the vkey hash
+/// this client expects. Catches "edited lib.rs but didn't build-sbf/redeploy",
+/// which otherwise surfaces as an opaque `Custom(7)` (pairing failure) on-chain.
+///
+/// Layout (BPFLoaderUpgradeable):
+///   program account   = 4-byte enum tag (2 = Program) || 32-byte ProgramData pubkey
+///   programdata acct  = 45-byte metadata (tag, slot, Option<authority>) || raw .so
+/// `FIBONACCI_VKEY_HASH` is a string literal in the program, so it appears verbatim
+/// in the `.so`'s `.rodata`.
+fn check_deployed_program(rpc: &RpcClient, program_id: &Pubkey) {
+    let program = rpc
+        .get_account(program_id)
+        .unwrap_or_else(|e| panic!("program {program_id} not found on {}: {e}", rpc.url()));
+    if !program.executable {
+        panic!("{program_id} is not an executable account");
+    }
+
+    let elf: Vec<u8> = if program.owner.to_string() == "BPFLoaderUpgradeab1e11111111111111111111111"
+    {
+        assert!(
+            program.data.len() >= 36,
+            "malformed upgradeable program account"
+        );
+        let programdata = Pubkey::try_from(&program.data[4..36]).expect("programdata pubkey");
+        let data = rpc
+            .get_account_data(&programdata)
+            .expect("programdata account");
+        data[45..].to_vec()
+    } else {
+        // Non-upgradeable loaders store the ELF directly in the program account.
+        program.data
+    };
+
+    if !elf
+        .windows(FIBONACCI_VKEY_HASH.len())
+        .any(|w| w == FIBONACCI_VKEY_HASH.as_bytes())
+    {
+        eprintln!(
+            "\ndeployed program {program_id} does not contain FIBONACCI_VKEY_HASH = {FIBONACCI_VKEY_HASH}\n\
+             It was built from an older example/program/src/lib.rs. Rebuild and redeploy:\n\
+             \x20 cargo build-sbf --manifest-path example/program/Cargo.toml\n\
+             \x20 solana program deploy target/deploy/fibonacci_verifier_contract.so \\\n\
+             \x20     --program-id target/deploy/fibonacci_verifier_contract-keypair.json\n"
+        );
+        std::process::exit(3);
+    }
+    println!(
+        "deployed program {program_id} matches FIBONACCI_VKEY_HASH ({} byte ELF)",
+        elf.len()
+    );
+}
+
 fn verify_on_chain(args: &Cli, program_id: Pubkey, ix_data: &SP1Groth16Proof) {
     let rpc = RpcClient::new_with_commitment(args.rpc_url.clone(), CommitmentConfig::confirmed());
+    check_deployed_program(&rpc, &program_id);
     let payer: Keypair =
         read_keypair_file(args.keypair.clone().unwrap_or_else(default_keypair_path))
             .expect("read payer keypair; run `solana-keygen new` or pass --keypair");
@@ -212,12 +280,20 @@ async fn main() {
 
     // Same code path the program runs, on the host (pure-Rust bn254 instead of
     // syscalls). Fails fast before we spend a transaction.
-    sp1_solana::verify_proof(
+    if let Err(e) = sp1_solana::verify_proof(
         &ix_data.proof,
         &ix_data.sp1_public_inputs,
         FIBONACCI_VKEY_HASH,
-    )
-    .expect("host-side verification failed");
+    ) {
+        eprintln!(
+            "\nhost-side verification failed: {e}\n\
+             The proof at {} was not produced for the guest ELF whose vkey is FIBONACCI_VKEY_HASH\n\
+             ({FIBONACCI_VKEY_HASH}). This happens after the guest or its build mode changed.\n\
+             Regenerate it:  cargo run --release -- --prove [--program-id <ID>]\n",
+            args.proof_file.display()
+        );
+        std::process::exit(4);
+    }
     println!("host-side verification OK");
 
     match &args.program_id {
