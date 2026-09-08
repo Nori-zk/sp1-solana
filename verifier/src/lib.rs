@@ -29,7 +29,7 @@
 //!
 //! let proof = SP1ProofWithPublicValues::load("../proofs/fibonacci_proof.bin").unwrap();
 //! // `vk.bytes32()` from `ProverClient::setup(ELF)`.
-//! let vkey_hash = "0x00bb9e57314d7ee4f65a4b9fb46fbeae0495f2015c5a8a737333680ce6bb424e";
+//! let vkey_hash = "0x0034abe3cbf32aa5b9fd0f17bba8e3dafa0adfd63d6ef7a5d127f6df78ab4e93";
 //! verify_proof(&proof.bytes(), proof.public_values.as_slice(), vkey_hash).unwrap();
 //! ```
 
