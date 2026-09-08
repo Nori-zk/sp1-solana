@@ -2,20 +2,25 @@
 //!
 //! SP1 commits `sha256(public_values)` (default) or `blake3(public_values)`
 //! into the Groth16 wrapper, with the top 3 bits zeroed so the digest fits in
-//! the 254-bit BN254 scalar field. Both are reproduced here.
+//! the 254-bit BN254 scalar field.
 //!
-//! On the Solana SBF target (`target_os = "solana"`) `solana-sha256-hasher` and
-//! `solana-blake3-hasher` dispatch to the `sol_sha256` / `sol_blake3` runtime
-//! syscalls; on the host they use the pure-Rust `sha2` / `blake3` crates.
-//! Either way the call site here is the same.
+//! SHA-256 uses `solana-sha256-hasher`: the `sol_sha256` syscall on the SBF
+//! target (`target_os = "solana"`), the pure-Rust `sha2` crate on the host.
+//!
+//! Blake3 is behind the `blake3` cargo feature and always uses the pure-Rust
+//! `blake3` crate. Solana does define a `sol_blake3` syscall, but it is
+//! feature-gated (`HTW2pSyErTj4BV6KBM9NZ9VBUJVxt7sacNWcf76wtzb3`) and inactive
+//! on every public cluster; a program that references it is rejected at
+//! deploy time with `ELF error: Unresolved symbol (sol_blake3)`.
 
 /// Which hash function the SP1 guest program used to commit its public values.
 ///
 /// `sp1_zkvm::io::commit` uses SHA-256. Blake3 is selected by guest programs
-/// compiled with the SP1 blake3 public-values feature.
+/// compiled with SP1's blake3 public-values option.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PublicValuesHash {
     Sha256,
+    #[cfg(feature = "blake3")]
     Blake3,
 }
 
@@ -33,14 +38,16 @@ pub fn hash_public_values_sha256(public_values: &[u8]) -> [u8; 32] {
 }
 
 /// `blake3(public_values)` with the field mask applied.
+#[cfg(feature = "blake3")]
 pub fn hash_public_values_blake3(public_values: &[u8]) -> [u8; 32] {
-    mask_to_field(solana_blake3_hasher::hash(public_values).to_bytes())
+    mask_to_field(*blake3::hash(public_values).as_bytes())
 }
 
 /// Hash public values with the selected function.
 pub fn hash_public_values(public_values: &[u8], hash: PublicValuesHash) -> [u8; 32] {
     match hash {
         PublicValuesHash::Sha256 => hash_public_values_sha256(public_values),
+        #[cfg(feature = "blake3")]
         PublicValuesHash::Blake3 => hash_public_values_blake3(public_values),
     }
 }

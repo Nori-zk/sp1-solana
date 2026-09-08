@@ -6568,13 +6568,14 @@ dependencies = [
 name = "sp1-solana"
 version = "0.2.0"
 dependencies = [
+ "blake3",
  "groth16-solana",
  "hex",
  "hex-literal",
  "sha2 0.10.9",
- "solana-blake3-hasher",
  "solana-sha256-hasher",
  "sp1-sdk",
+ "sp1-solana",
  "thiserror 2.0.20",
 ]
 

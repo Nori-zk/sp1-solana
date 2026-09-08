@@ -13,3 +13,9 @@ test_serialized_fixture.bin
 
 # SP1 guest ELF is rebuilt by example/script/build.rs (sp1-build); not committed.
 example/sp1-program/elf/
+
+# personal notes
+NOTES.local.md
+
+# surfpool runtime state
+.surfpool/

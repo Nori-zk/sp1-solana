@@ -14,23 +14,30 @@ categories = ["cryptography"]
 level = "warn"
 check-cfg = ['cfg(target_os, values("solana"))']
 
+[features]
+default = []
+# Accept guest programs that committed public values with blake3 instead of
+# SHA-256. The `sol_blake3` syscall is feature-gated (HTW2pSyErTj4BV6KBM9NZ9VBUJVxt7sacNWcf76wtzb3)
+# and NOT active on mainnet/devnet/testnet, so a program referencing it fails
+# to load. This feature therefore compiles the pure-Rust `blake3` crate into
+# the program instead (~larger .so, ~tens of thousands of CU per hash).
+blake3 = ["dep:blake3"]
+
 [dependencies]
 groth16-solana.workspace = true
 thiserror.workspace = true
 hex.workspace = true
-
-# Hashing of SP1 public values. On the SBF target these resolve to the
-# `sol_sha256` / `sol_blake3` syscalls; on the host they need the pure-Rust
-# backends, which the `sha2` / `blake3` features below enable.
+# SHA-256 of the public values: `sol_sha256` syscall on SBF, `sha2` on the host.
 solana-sha256-hasher.workspace = true
-solana-blake3-hasher.workspace = true
+blake3 = { version = "1.5", optional = true, default-features = false }
 
 [target.'cfg(not(target_os = "solana"))'.dependencies]
 solana-sha256-hasher = { workspace = true, features = ["sha2"] }
-solana-blake3-hasher = { workspace = true, features = ["blake3"] }
-# Host-only: `vkgen` (gnark-compressed .bin → Rust const) and the `gen_vk` example.
+# Host-only: `vkgen` and the `gen_vk` example hash the vk .bin.
 sha2.workspace = true
+hex = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
 sp1-sdk = { workspace = true }
 hex-literal = "0.4"
+sp1-solana = { path = ".", features = ["blake3"] }

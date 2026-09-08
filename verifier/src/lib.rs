@@ -71,10 +71,11 @@ pub const EXIT_CODE_SUCCESS: [u8; 32] = [0u8; 32];
 
 /// Verify an SP1 Groth16 proof whose guest program exited successfully.
 ///
-/// Tries the SHA-256 public-values digest first and falls back to blake3, so
-/// it accepts proofs from either commit mode at the cost of a second pairing
-/// (~80k CU) when the first fails. Production programs that know their commit
-/// mode should call [`verify_proof_with_hash`] instead.
+/// Uses the SHA-256 public-values digest (`sp1_zkvm::io::commit`). With the
+/// `blake3` cargo feature it falls back to blake3 when the SHA-256 pairing
+/// fails, so it accepts proofs from either commit mode at the cost of a second
+/// pairing (~80k CU) on the failure path. Programs that know their commit mode
+/// should call [`verify_proof_with_hash`].
 ///
 /// * `proof` — `SP1ProofWithPublicValues::bytes()`
 /// * `sp1_public_values` — `SP1ProofWithPublicValues::public_values.as_slice()`
@@ -89,31 +90,33 @@ pub fn verify_proof(
 }
 
 /// Like [`verify_proof`], but for guest programs that exit with a non-zero code
-/// (e.g. a proven panic). Tries SHA-256 then blake3.
+/// (e.g. a proven panic).
 pub fn verify_proof_with_exit_code(
     proof: &[u8],
     sp1_public_values: &[u8],
     sp1_vkey_hash: &str,
     expected_exit_code: [u8; 32],
 ) -> Result<(), Error> {
-    match verify_proof_with_hash(
+    let result = verify_proof_with_hash(
         proof,
         sp1_public_values,
         sp1_vkey_hash,
         expected_exit_code,
         PublicValuesHash::Sha256,
-    ) {
-        // Only a pairing failure can be explained by the wrong digest; every
-        // other error is definitive and retrying would just burn CU.
-        Err(Error::Groth16(_)) => verify_proof_with_hash(
+    );
+    #[cfg(feature = "blake3")]
+    // Only a pairing failure can be explained by the wrong digest; every other
+    // error is definitive and retrying would just burn CU.
+    if let Err(Error::Groth16(_)) = result {
+        return verify_proof_with_hash(
             proof,
             sp1_public_values,
             sp1_vkey_hash,
             expected_exit_code,
             PublicValuesHash::Blake3,
-        ),
-        other => other,
+        );
     }
+    result
 }
 
 /// Verify an SP1 Groth16 proof with an explicit public-values hash function.
