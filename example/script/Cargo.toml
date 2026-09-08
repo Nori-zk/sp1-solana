@@ -1,18 +1,38 @@
 [package]
 name = "example-script"
 authors = ["Bhargav Annem, Yuwen Zhang"]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 publish = false
 
 [dependencies]
-fibonacci-verifier-contract.workspace = true
-solana-program-test.workspace = true
-solana-sdk.workspace = true
-tokio.workspace = true
+fibonacci-verifier-contract = { workspace = true, features = ["no-entrypoint"] }
+sp1-solana.workspace = true
+
+# Solana RPC client + transaction building (Agave 3.x granular crates).
+solana-rpc-client.workspace = true
+solana-rpc-client-api.workspace = true
+solana-commitment-config.workspace = true
+solana-compute-budget-interface.workspace = true
+solana-transaction.workspace = true
+solana-transaction-status-client-types.workspace = true
+solana-instruction.workspace = true
+solana-keypair.workspace = true
+solana-signer.workspace = true
+solana-pubkey.workspace = true
+borsh.workspace = true
 
 clap = { version = "4.0", features = ["derive"] }
 sp1-sdk.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[features]
+default = []
+# GPU proving. Build with `--features cuda`, run with `SP1_PROVER=cuda`.
+# Needs Linux x86_64, an NVIDIA driver + CUDA 12 runtime, compute capability >= 8.0.
+# The SDK downloads `sp1-gpu-server` to ~/.sp1/bin on first use; Docker is not
+# involved in the GPU path (it is still used for the gnark Groth16 wrap).
+cuda = ["sp1-sdk/cuda"]
 
 [build-dependencies]
 sp1-build.workspace = true

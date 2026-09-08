@@ -1,98 +1,311 @@
-use clap::Parser;
-use fibonacci_verifier_contract::SP1Groth16Proof;
-use solana_program_test::{processor, ProgramTest};
-use solana_sdk::{
-    instruction::{AccountMeta, Instruction},
-    pubkey::Pubkey,
-    signer::Signer,
-    transaction::Transaction,
-};
-use sp1_sdk::{include_elf, utils, ProverClient, SP1ProofWithPublicValues, SP1Stdin};
+//! Example client: (optionally) prove the fibonacci guest with SP1, then send
+//! the Groth16 proof to the deployed verifier program on a local Solana RPC
+//! (Surfpool by default) and report compute units.
+//!
+//! Docker is required: `build.rs` compiles the guest in `ghcr.io/succinctlabs/sp1`
+//! for a reproducible ELF/vkey, and `--prove` runs the gnark Groth16 wrapper in
+//! `succinctlabs/sp1-gnark`. `--prove` also downloads ~6 GB of circuit artifacts
+//! to `~/.sp1/circuits/groth16/<version>` on first use.
+//!
+//! Exit codes: 2 = guest vkey != FIBONACCI_VKEY_HASH, 3 = deployed program stale,
+//! 4 = proof file does not verify against FIBONACCI_VKEY_HASH. Each prints the fix.
+//!
+//! Prover selection is by environment, unchanged from the SP1 SDK:
+//!   SP1_PROVER=cpu      (default) local CPU prover
+//!   SP1_PROVER=cuda     local GPU prover; build this crate with `--features cuda`.
+//!                       Needs an NVIDIA driver + CUDA 12; the SDK downloads and runs
+//!                       `sp1-gpu-server` (~/.sp1/bin) itself. No Docker on this path.
+//!   SP1_PROVER=network  Succinct Prover Network (needs NETWORK_PRIVATE_KEY)
+//!
+//! Usage:
+//!   surfpool start --no-tui --no-deploy --offline --airdrop-keypair-path ~/.config/solana/id.json
+//!   solana program deploy ../../target/deploy/fibonacci_verifier_contract.so \
+//!       --program-id ../../target/deploy/fibonacci_verifier_contract-keypair.json
+//!   cargo run --release -- --program-id <PUBKEY> [--prove] [--rpc-url http://127.0.0.1:8899]
+//!   SP1_PROVER=cuda cargo run --release --features cuda -- --prove --program-id <PUBKEY>
 
-#[derive(clap::Parser)]
-#[command(name = "zkVM Proof Generator")]
+use std::{path::PathBuf, str::FromStr};
+
+use borsh::to_vec;
+use clap::Parser;
+use fibonacci_verifier_contract::{SP1Groth16Proof, FIBONACCI_VKEY_HASH};
+use solana_commitment_config::CommitmentConfig;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
+use solana_instruction::Instruction;
+use solana_keypair::{read_keypair_file, Keypair};
+use solana_pubkey::Pubkey;
+use solana_rpc_client::rpc_client::RpcClient;
+use solana_rpc_client_api::config::RpcTransactionConfig;
+use solana_signer::Signer;
+use solana_transaction::Transaction;
+use solana_transaction_status_client_types::UiTransactionEncoding;
+use sp1_sdk::{
+    include_elf, utils, Elf, HashableKey, ProveRequest, Prover, ProverClient, ProvingKey,
+    SP1ProofWithPublicValues, SP1Stdin,
+};
+
+/// The RISC-V ELF of the fibonacci guest, built by `build.rs` via `sp1-build`.
+const ELF: Elf = include_elf!("fibonacci-program");
+
+#[derive(Parser)]
+#[command(
+    name = "sp1-solana example",
+    about = "Prove fib(n) with SP1 and verify it on Solana"
+)]
 struct Cli {
-    #[arg(
-        long,
-        value_name = "prove",
-        default_value = "false",
-        help = "Specifies whether to generate a proof for the program."
-    )]
+    /// Generate a fresh Groth16 proof (needs Docker + SP1 circuit artifacts).
+    /// Otherwise the proof at --proof-file is loaded.
+    #[arg(long)]
     prove: bool,
+
+    /// Fibonacci index the guest computes.
+    #[arg(long, default_value_t = 20)]
+    n: u32,
+
+    /// Where to save / load the SP1 proof.
+    #[arg(long, default_value = "../../proofs/fibonacci_proof.bin")]
+    proof_file: PathBuf,
+
+    /// Deployed `fibonacci-verifier-contract` program id. Skip on-chain
+    /// verification when omitted (host-side verification still runs).
+    #[arg(long)]
+    program_id: Option<String>,
+
+    /// JSON-RPC endpoint. Surfpool's default.
+    #[arg(long, default_value = "http://127.0.0.1:8899")]
+    rpc_url: String,
+
+    /// Fee payer keypair. Surfpool airdrops to the default CLI keypair on start.
+    #[arg(long)]
+    keypair: Option<PathBuf>,
+
+    /// Compute unit limit for the verify transaction.
+    #[arg(long, default_value_t = 400_000)]
+    cu_limit: u32,
 }
 
-/// The ELF binary of the SP1 program.
-const ELF: &[u8] = include_elf!("fibonacci-program");
+fn default_keypair_path() -> PathBuf {
+    let home = std::env::var_os("HOME").expect("HOME not set");
+    PathBuf::from(home).join(".config/solana/id.json")
+}
 
-/// Invokes the solana program using Solana Program Test.
-async fn run_verify_instruction(groth16_proof: SP1Groth16Proof) {
-    let program_id = Pubkey::new_unique();
+async fn prove(args: &Cli) -> SP1ProofWithPublicValues {
+    let backend = std::env::var("SP1_PROVER").unwrap_or_else(|_| "cpu".into());
+    if backend == "cuda" && !cfg!(feature = "cuda") {
+        panic!("SP1_PROVER=cuda but this binary was built without `--features cuda`");
+    }
+    println!("prover backend: {backend}");
 
-    // Create program test environment
-    let (banks_client, payer, recent_blockhash) = ProgramTest::new(
-        "fibonacci-verifier-contract",
-        program_id,
-        processor!(fibonacci_verifier_contract::process_instruction),
-    )
-    .start()
-    .await;
+    // The v6 SDK is async. Everything the prover owns (for CUDA: a socket to
+    // `sp1-gpu-server` whose Drop calls `tokio::spawn`) must be created and
+    // dropped inside the runtime, so this fn is async and `main` is #[tokio::main].
+    // Picks cpu/cuda/network from SP1_PROVER.
+    let client = ProverClient::from_env().await;
+    let pk = client.setup(ELF).await.expect("setup");
 
-    let instruction = Instruction::new_with_borsh(
-        program_id,
-        &groth16_proof,
-        vec![AccountMeta::new(payer.pubkey(), false)],
+    let vkey_hash = pk.verifying_key().bytes32();
+    println!("guest vkey hash: {vkey_hash}");
+    if vkey_hash != FIBONACCI_VKEY_HASH {
+        eprintln!(
+            "\nguest vkey hash differs from FIBONACCI_VKEY_HASH in example/program/src/lib.rs\n\
+             \x20 expected  {FIBONACCI_VKEY_HASH}\n\
+             \x20 got       {vkey_hash}\n\
+             \n\
+             The guest ELF was rebuilt with a different toolchain or build mode (native vs\n\
+             Docker). If the new ELF is the one you want, paste this into example/program/src/lib.rs:\n\
+             \n\
+             pub const FIBONACCI_VKEY_HASH: &str =\n\
+             \x20   \"{vkey_hash}\";\n\
+             \n\
+             then rebuild and redeploy the program before re-running:\n\
+             \x20 cargo build-sbf --manifest-path example/program/Cargo.toml\n\
+             \x20 solana program deploy target/deploy/fibonacci_verifier_contract.so \\\n\
+             \x20     --program-id target/deploy/fibonacci_verifier_contract-keypair.json\n"
+        );
+        std::process::exit(2);
+    }
+
+    let mut stdin = SP1Stdin::new();
+    stdin.write(&args.n);
+
+    let started = std::time::Instant::now();
+    let proof = client
+        .prove(&pk, stdin)
+        .groth16()
+        .await
+        .expect("Groth16 proof generation failed");
+    println!("proved fib({}) in {:.1?}", args.n, started.elapsed());
+
+    if let Some(dir) = args.proof_file.parent() {
+        std::fs::create_dir_all(dir).expect("create proofs dir");
+    }
+    proof.save(&args.proof_file).expect("save proof");
+    println!("saved {}", args.proof_file.display());
+    proof
+}
+
+/// Fetch the deployed program's ELF and check it was built with the vkey hash
+/// this client expects. Catches "edited lib.rs but didn't build-sbf/redeploy",
+/// which otherwise surfaces as an opaque `Custom(7)` (pairing failure) on-chain.
+///
+/// Layout (BPFLoaderUpgradeable):
+///   program account   = 4-byte enum tag (2 = Program) || 32-byte ProgramData pubkey
+///   programdata acct  = 45-byte metadata (tag, slot, Option<authority>) || raw .so
+/// `FIBONACCI_VKEY_HASH` is a string literal in the program, so it appears verbatim
+/// in the `.so`'s `.rodata`.
+fn check_deployed_program(rpc: &RpcClient, program_id: &Pubkey) {
+    let program = rpc
+        .get_account(program_id)
+        .unwrap_or_else(|e| panic!("program {program_id} not found on {}: {e}", rpc.url()));
+    if !program.executable {
+        panic!("{program_id} is not an executable account");
+    }
+
+    let elf: Vec<u8> = if program.owner.to_string() == "BPFLoaderUpgradeab1e11111111111111111111111"
+    {
+        assert!(
+            program.data.len() >= 36,
+            "malformed upgradeable program account"
+        );
+        let programdata = Pubkey::try_from(&program.data[4..36]).expect("programdata pubkey");
+        let data = rpc
+            .get_account_data(&programdata)
+            .expect("programdata account");
+        data[45..].to_vec()
+    } else {
+        // Non-upgradeable loaders store the ELF directly in the program account.
+        program.data
+    };
+
+    if !elf
+        .windows(FIBONACCI_VKEY_HASH.len())
+        .any(|w| w == FIBONACCI_VKEY_HASH.as_bytes())
+    {
+        eprintln!(
+            "\ndeployed program {program_id} does not contain FIBONACCI_VKEY_HASH = {FIBONACCI_VKEY_HASH}\n\
+             It was built from an older example/program/src/lib.rs. Rebuild and redeploy:\n\
+             \x20 cargo build-sbf --manifest-path example/program/Cargo.toml\n\
+             \x20 solana program deploy target/deploy/fibonacci_verifier_contract.so \\\n\
+             \x20     --program-id target/deploy/fibonacci_verifier_contract-keypair.json\n"
+        );
+        std::process::exit(3);
+    }
+    println!(
+        "deployed program {program_id} matches FIBONACCI_VKEY_HASH ({} byte ELF)",
+        elf.len()
+    );
+}
+
+fn verify_on_chain(args: &Cli, program_id: Pubkey, ix_data: &SP1Groth16Proof) {
+    let rpc = RpcClient::new_with_commitment(args.rpc_url.clone(), CommitmentConfig::confirmed());
+    check_deployed_program(&rpc, &program_id);
+    let payer: Keypair =
+        read_keypair_file(args.keypair.clone().unwrap_or_else(default_keypair_path))
+            .expect("read payer keypair; run `solana-keygen new` or pass --keypair");
+
+    let balance = rpc.get_balance(&payer.pubkey()).expect("get_balance");
+    println!("payer {} balance {} lamports", payer.pubkey(), balance);
+    assert!(
+        balance > 0,
+        "payer is unfunded: `solana airdrop 10 --url {}`",
+        args.rpc_url
     );
 
-    // Create and send transaction
-    let mut transaction = Transaction::new_with_payer(&[instruction], Some(&payer.pubkey()));
-    transaction.sign(&[&payer], recent_blockhash);
-    banks_client.process_transaction(transaction).await.unwrap();
+    let data = to_vec(ix_data).expect("borsh");
+    println!("instruction data: {} bytes", data.len());
+
+    let instructions = [
+        ComputeBudgetInstruction::set_compute_unit_limit(args.cu_limit),
+        Instruction::new_with_bytes(program_id, &data, vec![]),
+    ];
+    let blockhash = rpc.get_latest_blockhash().expect("get_latest_blockhash");
+    let tx = Transaction::new_signed_with_payer(
+        &instructions,
+        Some(&payer.pubkey()),
+        &[&payer],
+        blockhash,
+    );
+
+    let sig = rpc
+        .send_and_confirm_transaction(&tx)
+        .expect("verify transaction failed");
+    println!("confirmed: {sig}");
+
+    let meta = rpc
+        .get_transaction_with_config(
+            &sig,
+            RpcTransactionConfig {
+                encoding: Some(UiTransactionEncoding::Base64),
+                commitment: Some(CommitmentConfig::confirmed()),
+                max_supported_transaction_version: Some(0),
+            },
+        )
+        .expect("get_transaction")
+        .transaction
+        .meta
+        .expect("transaction meta");
+
+    let logs: Vec<String> = Option::from(meta.log_messages).unwrap_or_default();
+    for line in &logs {
+        println!("  log: {line}");
+    }
+    let cu: Option<u64> = Option::from(meta.compute_units_consumed);
+    match cu {
+        Some(cu) => println!("compute units consumed: {cu}"),
+        None => println!("compute units consumed: (not reported by RPC)"),
+    }
 }
 
 #[tokio::main]
 async fn main() {
-    // Setup logging for the application.
     utils::setup_logger();
-
-    // Where to save / load the sp1 proof from.
-    let proof_file = "../../proofs/fibonacci_proof.bin";
-
-    // Parse command line arguments.
     let args = Cli::parse();
 
-    // Only generate a proof if the prove flag is set.
-    if args.prove {
-        // Initialize the prover client
-        let client = ProverClient::from_env();
-        let (pk, vk) = client.setup(ELF);
-
-        println!(
-            "Program Verification Key Bytes {:?}",
-            sp1_sdk::HashableKey::bytes32(&vk)
-        );
-
-        // In our SP1 program, compute the 20th fibonacci number.
-        let mut stdin = SP1Stdin::new();
-        stdin.write(&20u32);
-
-        // Generate a proof for the fibonacci program.
-        let proof = client
-            .prove(&pk, &stdin)
-            .groth16()
-            .run()
-            .expect("Groth16 proof generation failed");
-
-        // Save the generated proof to `proof_file`.
-        proof.save(proof_file).unwrap();
-    }
-
-    // Load the proof from the file, and convert it to a Borsh-serializable `SP1Groth16Proof`.
-    let sp1_proof_with_public_values = SP1ProofWithPublicValues::load(proof_file).unwrap();
-    let groth16_proof = SP1Groth16Proof {
-        proof: sp1_proof_with_public_values.bytes(),
-        sp1_public_inputs: sp1_proof_with_public_values.public_values.to_vec(),
+    let proof = if args.prove {
+        prove(&args).await
+    } else {
+        SP1ProofWithPublicValues::load(&args.proof_file).unwrap_or_else(|e| {
+            panic!(
+                "failed to load {}: {e}. Run with --prove to generate it.",
+                args.proof_file.display()
+            )
+        })
     };
 
-    // Send the proof to the contract, and verify it on `solana-program-test`.
-    run_verify_instruction(groth16_proof).await;
+    let ix_data = SP1Groth16Proof {
+        proof: proof.bytes(),
+        sp1_public_inputs: proof.public_values.to_vec(),
+    };
+    println!(
+        "proof: {} bytes, public values: {} bytes",
+        ix_data.proof.len(),
+        ix_data.sp1_public_inputs.len()
+    );
+
+    // Same code path the program runs, on the host (pure-Rust bn254 instead of
+    // syscalls). Fails fast before we spend a transaction.
+    if let Err(e) = sp1_solana::verify_proof(
+        &ix_data.proof,
+        &ix_data.sp1_public_inputs,
+        FIBONACCI_VKEY_HASH,
+    ) {
+        eprintln!(
+            "\nhost-side verification failed: {e}\n\
+             The proof at {} was not produced for the guest ELF whose vkey is FIBONACCI_VKEY_HASH\n\
+             ({FIBONACCI_VKEY_HASH}). This happens after the guest or its build mode changed.\n\
+             Regenerate it:  cargo run --release -- --prove [--program-id <ID>]\n",
+            args.proof_file.display()
+        );
+        std::process::exit(4);
+    }
+    println!("host-side verification OK");
+
+    match &args.program_id {
+        Some(id) => verify_on_chain(
+            &args,
+            Pubkey::from_str(id).expect("invalid --program-id"),
+            &ix_data,
+        ),
+        None => println!("no --program-id given; skipping on-chain verification"),
+    }
 }

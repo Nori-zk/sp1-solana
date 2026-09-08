@@ -1,107 +1,199 @@
-//! # Verifier
+//! # sp1-solana
 //!
-//! This crate contains utilities for verifying SP1 Groth16 proofs on Solana.
+//! Verifies SP1 Groth16 proofs on Solana using the BN254 `alt_bn128` syscalls,
+//! via [`groth16-solana`](https://github.com/Lightprotocol/groth16-solana).
 //!
-//! # Example
+//! Supports SP1 circuit version **v6.1.0** (shipped by `sp1-sdk` 6.5.0 through 6.7.0). One
+//! crate version is bound to one circuit version: the Groth16 verifying key
+//! and the recursion vk root are compiled in as constants.
+//!
+//! ## SP1 v6 Groth16 proof layout
+//!
+//! `SP1ProofWithPublicValues::bytes()` returns 356 bytes:
+//!
+//! ```text
+//! [ 0..  4)  groth16 vk hash prefix  sha256(groth16_vk.bin)[..4]
+//! [ 4.. 36)  exit_code               u256 BE, 0 for a program that returned normally
+//! [36.. 68)  vk_root                 recursion vk merkle root, fixed per SP1 release
+//! [68..100)  proof_nonce             per-proof randomness
+//! [100..356) groth16 proof           A (G1 64) || B (G2 128) || C (G1 64), BE, as gnark emits
+//! ```
+//!
+//! The circuit has 5 public inputs, in order:
+//! `vkey_hash, committed_values_digest, exit_code, vk_root, proof_nonce`.
+//!
+//! ## Example
 //! ```no_run
-//! use sp1_sdk::proof::SP1ProofWithPublicValues;
-//! use sp1_solana::{verify_proof, GROTH16_VK_2_0_0_BYTES};
+//! use sp1_sdk::SP1ProofWithPublicValues;
+//! use sp1_solana::verify_proof;
 //!
-//! // Load the sp1_proof_with_public_values from a file.
-//! let sp1_proof_with_public_values_file = "../proofs/fibonacci_proof.bin";
-//! let sp1_proof_with_public_values =
-//!     SP1ProofWithPublicValues::load(&sp1_proof_with_public_values_file).unwrap();
-//!
-//! // Fetch the proof and public inputs from the SP1ProofWithPublicValues.
-//! let proof_bytes = sp1_proof_with_public_values.bytes();
-//! let sp1_public_inputs = sp1_proof_with_public_values.public_values.to_vec();
-//!
-//! // Typically, the vkey hash is computed from `vk.bytes32()` on the SP1 program's vkey.
-//! let vkey_hash = "0x0083e8e370d7f0d1c463337f76c9a60b62ad7cc54c89329107c92c1e62097872";
-//!
-//! verify_proof(&proof_bytes, &sp1_public_inputs, &vkey_hash, &GROTH16_VK_2_0_0_BYTES).unwrap();
+//! let proof = SP1ProofWithPublicValues::load("../proofs/fibonacci_proof.bin").unwrap();
+//! // `vk.bytes32()` from `ProverClient::setup(ELF)`.
+//! let vkey_hash = "0x00e8dad83fa005b8aae28d5699cc5be3174e6ef947cf17ecf11ff38cac809dbc";
+//! verify_proof(&proof.bytes(), proof.public_values.as_slice(), vkey_hash).unwrap();
 //! ```
 
-use groth16_solana::groth16::Groth16Verifyingkey;
-use sha2::{Digest, Sha256};
+pub mod error;
+pub mod hash;
+pub mod vk;
+
+#[cfg(not(target_os = "solana"))]
+pub mod vkgen;
 
 #[cfg(test)]
 mod test;
 
-mod utils;
-use utils::*;
+pub use error::Error;
+pub use hash::PublicValuesHash;
+pub use vk::{GROTH16_VK, GROTH16_VK_HASH_PREFIX, NR_PUBLIC_INPUTS, SP1_CIRCUIT_VERSION};
 
-/// Groth16 verification keys for different SP1 versions.
-pub const GROTH16_VK_5_0_0_BYTES: &[u8] = include_bytes!("../vk/v5.0.0/groth16_vk.bin");
-pub const GROTH16_VK_4_0_0_RC3_BYTES: &[u8] = include_bytes!("../vk/v4.0.0-rc.3/groth16_vk.bin");
-pub const GROTH16_VK_3_0_0_BYTES: &[u8] = include_bytes!("../vk/v3.0.0/groth16_vk.bin");
-pub const GROTH16_VK_3_0_0_RC4_BYTES: &[u8] = include_bytes!("../vk/v3.0.0rc4/groth16_vk.bin");
-pub const GROTH16_VK_2_0_0_BYTES: &[u8] = include_bytes!("../vk/v2.0.0/groth16_vk.bin");
+use groth16_solana::groth16::{negate_g1_be, Groth16Verifier};
 
-/// Verifies a proof using raw bytes, without any checks.
+/// Length of the vk hash prefix SP1 prepends to the proof.
+pub const VK_HASH_PREFIX_LEN: usize = 4;
+/// Length of the raw gnark Groth16 proof (A || B || C, uncompressed BE).
+pub const GROTH16_PROOF_LEN: usize = 256;
+/// Total length of `SP1ProofWithPublicValues::bytes()` for a Groth16 proof.
+pub const SP1_GROTH16_PROOF_LEN: usize = VK_HASH_PREFIX_LEN + 32 * 3 + GROTH16_PROOF_LEN;
+
+/// Merkle root of the SP1 recursion verifying keys for circuit `v6.1.0`.
 ///
-/// The public inputs are the vkey hash and the commited values digest, concatenated.
-/// The proof is a decompressed G1 element, followed by a decompressed G2 element, followed by a
-/// decompressed G1 element.
-pub fn verify_proof_raw(proof: &[u8], public_inputs: &[u8], vk: &[u8]) -> Result<(), Error> {
-    let proof = load_proof_from_bytes(proof)?;
-    let vk = load_groth16_verifying_key_from_bytes(vk)?;
-    let public_inputs = load_public_inputs_from_bytes(public_inputs)?;
+/// Copied from `sp1-verifier` (`VK_ROOT_BYTES`; identical at tags v6.5.0 and v6.7.0). Every proof for
+/// this circuit version commits to this root as its 4th public input; a
+/// different root means the proof came from another SP1 release.
+pub const VK_ROOT_BYTES: [u8; 32] = [
+    0x00, 0x2f, 0x85, 0x0e, 0xe9, 0x98, 0x97, 0x4d, 0x6c, 0xc0, 0x0e, 0x50, 0xcd, 0x08, 0x14, 0xb0,
+    0x98, 0xc0, 0x5b, 0xfa, 0xde, 0x46, 0x6d, 0x28, 0x57, 0x32, 0x40, 0xd0, 0x57, 0xf2, 0x53, 0x52,
+];
 
-    let vk = Groth16Verifyingkey {
-        nr_pubinputs: vk.nr_pubinputs as usize,
-        vk_alpha_g1: vk.vk_alpha_g1,
-        vk_beta_g2: vk.vk_beta_g2,
-        vk_gamme_g2: vk.vk_gamma_g2,
-        vk_delta_g2: vk.vk_delta_g2,
-        vk_ic: vk.vk_ic.as_slice(),
-    };
+/// Exit code committed by a guest program that returned normally.
+pub const EXIT_CODE_SUCCESS: [u8; 32] = [0u8; 32];
 
-    let mut verifier = groth16_solana::groth16::Groth16Verifier::new(
-        &proof.pi_a,
-        &proof.pi_b,
-        &proof.pi_c,
-        &public_inputs.inputs,
-        &vk,
-    )
-    .map_err(|_| Error::VerificationError)?;
-
-    verifier.verify().map_err(|_| Error::VerificationError)
-}
-
-/// Verifies a proof generated by [`SP1ProofWithPublicValues`].
+/// Verify an SP1 Groth16 proof whose guest program exited successfully.
 ///
-/// The proof is expected to be from this method on `SP1ProofWithPublicValues`:
-/// https://docs.rs/sp1-sdk/latest/sp1_sdk/proof/struct.SP1ProofWithPublicValues.html#method.bytes
-/// The public inputs are directly taken from the `SP1PublicValues`.
-/// https://docs.rs/sp1-sdk/latest/sp1_sdk/struct.SP1PublicValues.html#method.as_slice
-/// The vkey hash is derived from running `vk.bytes32()` on the program's vkey.
-/// https://docs.rs/sp1-sdk/latest/sp1_sdk/trait.HashableKey.html#method.bytes32
+/// Uses the SHA-256 public-values digest (`sp1_zkvm::io::commit`). With the
+/// `blake3` cargo feature it falls back to blake3 when the SHA-256 pairing
+/// fails, so it accepts proofs from either commit mode at the cost of a second
+/// pairing (~80k CU) on the failure path. Programs that know their commit mode
+/// should call [`verify_proof_with_hash`].
+///
+/// * `proof` — `SP1ProofWithPublicValues::bytes()`
+/// * `sp1_public_values` — `SP1ProofWithPublicValues::public_values.as_slice()`
+/// * `sp1_vkey_hash` — `vk.bytes32()` of the guest program, `0x`-prefixed hex
 #[inline]
 pub fn verify_proof(
     proof: &[u8],
-    sp1_public_inputs: &[u8],
+    sp1_public_values: &[u8],
     sp1_vkey_hash: &str,
-    groth16_vk: &[u8],
 ) -> Result<(), Error> {
-    // Hash the vk and get the first 4 bytes.
-    let groth16_vk_hash: [u8; 4] = Sha256::digest(groth16_vk)[..4].try_into().unwrap();
+    verify_proof_with_exit_code(proof, sp1_public_values, sp1_vkey_hash, EXIT_CODE_SUCCESS)
+}
 
-    // Check to make sure that this proof was generated by the groth16 proving key corresponding to
-    // the given groth16_vk.
-    //
-    // SP1 prepends the raw Groth16 proof with the first 4 bytes of the groth16 vkey to
-    // facilitate this check.
-    if groth16_vk_hash != proof[..4] {
+/// Like [`verify_proof`], but for guest programs that exit with a non-zero code
+/// (e.g. a proven panic).
+pub fn verify_proof_with_exit_code(
+    proof: &[u8],
+    sp1_public_values: &[u8],
+    sp1_vkey_hash: &str,
+    expected_exit_code: [u8; 32],
+) -> Result<(), Error> {
+    let result = verify_proof_with_hash(
+        proof,
+        sp1_public_values,
+        sp1_vkey_hash,
+        expected_exit_code,
+        PublicValuesHash::Sha256,
+    );
+    #[cfg(feature = "blake3")]
+    // Only a pairing failure can be explained by the wrong digest; every other
+    // error is definitive and retrying would just burn CU.
+    if let Err(Error::Groth16(_)) = result {
+        return verify_proof_with_hash(
+            proof,
+            sp1_public_values,
+            sp1_vkey_hash,
+            expected_exit_code,
+            PublicValuesHash::Blake3,
+        );
+    }
+    result
+}
+
+/// Verify an SP1 Groth16 proof with an explicit public-values hash function.
+/// Exactly one pairing check; the cheapest entry point.
+pub fn verify_proof_with_hash(
+    proof: &[u8],
+    sp1_public_values: &[u8],
+    sp1_vkey_hash: &str,
+    expected_exit_code: [u8; 32],
+    hash: PublicValuesHash,
+) -> Result<(), Error> {
+    if proof.len() != SP1_GROTH16_PROOF_LEN {
+        return Err(Error::InvalidProofLength);
+    }
+
+    // 1. The proof must come from the Groth16 circuit this crate has the vk for.
+    if proof[..VK_HASH_PREFIX_LEN] != GROTH16_VK_HASH_PREFIX {
         return Err(Error::Groth16VkeyHashMismatch);
     }
 
-    let sp1_vkey_hash = decode_sp1_vkey_hash(sp1_vkey_hash)?;
+    let exit_code: [u8; 32] = proof[4..36].try_into().expect("length checked");
+    let vk_root: [u8; 32] = proof[36..68].try_into().expect("length checked");
+    let proof_nonce: [u8; 32] = proof[68..100].try_into().expect("length checked");
 
-    // Verify the proof.
-    verify_proof_raw(
-        &proof[4..],
-        &groth16_public_values(&sp1_vkey_hash, sp1_public_inputs),
-        groth16_vk,
-    )
+    // 2. The recursion vk root is fixed per SP1 release.
+    if vk_root != VK_ROOT_BYTES {
+        return Err(Error::VkRootMismatch);
+    }
+
+    // 3. The guest exited how the caller expects.
+    if exit_code != expected_exit_code {
+        return Err(Error::ExitCodeMismatch);
+    }
+
+    let sp1_vkey_hash = decode_sp1_vkey_hash(sp1_vkey_hash)?;
+    let committed_values_digest = hash::hash_public_values(sp1_public_values, hash);
+
+    let public_inputs: [[u8; 32]; NR_PUBLIC_INPUTS] = [
+        sp1_vkey_hash,
+        committed_values_digest,
+        exit_code,
+        vk_root,
+        proof_nonce,
+    ];
+
+    verify_groth16_raw(&proof[VK_HASH_PREFIX_LEN + 96..], &public_inputs)
+}
+
+/// Run the bare Groth16 pairing check on a 256-byte gnark proof.
+///
+/// gnark emits `A`; the Solana pairing syscall checks
+/// `e(A,B) · e(inputs,γ) · e(C,δ) · e(α,β) == 1`, which needs `-A`.
+pub fn verify_groth16_raw(
+    groth16_proof: &[u8],
+    public_inputs: &[[u8; 32]; NR_PUBLIC_INPUTS],
+) -> Result<(), Error> {
+    if groth16_proof.len() != GROTH16_PROOF_LEN {
+        return Err(Error::InvalidProofLength);
+    }
+    let proof_a: [u8; 64] = groth16_proof[..64].try_into().expect("length checked");
+    let proof_a = negate_g1_be(&proof_a);
+    let proof_b: &[u8; 128] = groth16_proof[64..192].try_into().expect("length checked");
+    let proof_c: &[u8; 64] = groth16_proof[192..256].try_into().expect("length checked");
+
+    let mut verifier =
+        Groth16Verifier::new(&proof_a, proof_b, proof_c, public_inputs, &GROTH16_VK)?;
+    // `verify` (not `verify_unchecked`) also rejects public inputs >= the Fr modulus.
+    verifier.verify()?;
+    Ok(())
+}
+
+/// Decode `vk.bytes32()` (`0x` + 64 hex chars) into 32 bytes.
+pub fn decode_sp1_vkey_hash(sp1_vkey_hash: &str) -> Result<[u8; 32], Error> {
+    let hex_str = sp1_vkey_hash
+        .strip_prefix("0x")
+        .ok_or(Error::InvalidProgramVkeyHash)?;
+    let mut out = [0u8; 32];
+    hex::decode_to_slice(hex_str, &mut out).map_err(|_| Error::InvalidProgramVkeyHash)?;
+    Ok(out)
 }
