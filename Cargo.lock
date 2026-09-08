@@ -1603,6 +1603,7 @@ dependencies = [
  "sp1-build",
  "sp1-sdk",
  "sp1-solana",
+ "tokio",
 ]
 
 [[package]]

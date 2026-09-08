@@ -44,6 +44,6 @@ thiserror = { version = "2", default-features = false }
 # sp1 — 6.5.x ships circuit version v6.1.0 (see verifier/vk/v6.1.0).
 # Pinned exactly: 6.7.0 needs tempfile ≥3.20's TempDir::keep, and semver
 # resolution would otherwise drift onto it.
-sp1-sdk = { version = "=6.5.0", features = ["blocking"] }
+sp1-sdk = "=6.5.0"
 sp1-zkvm = "=6.5.0"
 sp1-build = "=6.5.0"

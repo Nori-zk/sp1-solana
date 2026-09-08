@@ -24,6 +24,7 @@ borsh.workspace = true
 
 clap = { version = "4.0", features = ["derive"] }
 sp1-sdk.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [features]
 default = []

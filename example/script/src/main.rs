@@ -36,8 +36,8 @@ use solana_signer::Signer;
 use solana_transaction::Transaction;
 use solana_transaction_status_client_types::UiTransactionEncoding;
 use sp1_sdk::{
-    blocking::{ProveRequest, Prover, ProverClient},
-    include_elf, utils, Elf, HashableKey, ProvingKey, SP1ProofWithPublicValues, SP1Stdin,
+    include_elf, utils, Elf, HashableKey, ProveRequest, Prover, ProverClient, ProvingKey,
+    SP1ProofWithPublicValues, SP1Stdin,
 };
 
 /// The RISC-V ELF of the fibonacci guest, built by `build.rs` via `sp1-build`.
@@ -85,16 +85,19 @@ fn default_keypair_path() -> PathBuf {
     PathBuf::from(home).join(".config/solana/id.json")
 }
 
-fn prove(args: &Cli) -> SP1ProofWithPublicValues {
+async fn prove(args: &Cli) -> SP1ProofWithPublicValues {
     let backend = std::env::var("SP1_PROVER").unwrap_or_else(|_| "cpu".into());
     if backend == "cuda" && !cfg!(feature = "cuda") {
         panic!("SP1_PROVER=cuda but this binary was built without `--features cuda`");
     }
     println!("prover backend: {backend}");
 
-    // `blocking` facade over the async v6 SDK; picks cpu/cuda/network from SP1_PROVER.
-    let client = ProverClient::from_env();
-    let pk = client.setup(ELF).expect("setup");
+    // The v6 SDK is async. Everything the prover owns (for CUDA: a socket to
+    // `sp1-gpu-server` whose Drop calls `tokio::spawn`) must be created and
+    // dropped inside the runtime, so this fn is async and `main` is #[tokio::main].
+    // Picks cpu/cuda/network from SP1_PROVER.
+    let client = ProverClient::from_env().await;
+    let pk = client.setup(ELF).await.expect("setup");
 
     let vkey_hash = pk.verifying_key().bytes32();
     println!("guest vkey hash: {vkey_hash}");
@@ -110,7 +113,7 @@ fn prove(args: &Cli) -> SP1ProofWithPublicValues {
     let proof = client
         .prove(&pk, stdin)
         .groth16()
-        .run()
+        .await
         .expect("Groth16 proof generation failed");
     println!("proved fib({}) in {:.1?}", args.n, started.elapsed());
 
@@ -181,12 +184,13 @@ fn verify_on_chain(args: &Cli, program_id: Pubkey, ix_data: &SP1Groth16Proof) {
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     utils::setup_logger();
     let args = Cli::parse();
 
     let proof = if args.prove {
-        prove(&args)
+        prove(&args).await
     } else {
         SP1ProofWithPublicValues::load(&args.proof_file).unwrap_or_else(|e| {
             panic!(

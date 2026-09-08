@@ -21,6 +21,17 @@ fn main() {
 
     let rendered = render_vk_rs(&vk, VERSION, &digest);
     std::fs::write(&out_path, rendered).expect("write src/vk.rs");
+
+    // Normalise with rustfmt so regenerating never produces a formatting-only diff.
+    let status = std::process::Command::new("rustfmt")
+        .arg("--edition=2021")
+        .arg(&out_path)
+        .status();
+    match status {
+        Ok(s) if s.success() => {}
+        Ok(s) => eprintln!("warning: rustfmt exited with {s}; run `cargo fmt` manually"),
+        Err(e) => eprintln!("warning: rustfmt not found ({e}); run `cargo fmt` manually"),
+    }
     println!(
         "wrote {} ({} public inputs, vk prefix {})",
         out_path.display(),

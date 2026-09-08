@@ -11,7 +11,7 @@ BN254 `alt_bn128` syscalls, via Light Protocol's
 
 | Component | Version | Notes |
 |---|---|---|
-| SP1 | `sp1-sdk` / `sp1-zkvm` / `sp1-build` **=6.5.0** | Circuit version **v6.1.0**. Pinned exactly; `6.x` semver would resolve to a newer SDK. |
+| SP1 | `sp1-sdk` / `sp1-zkvm` / `sp1-build` **=6.5.0** | Circuit version **v6.1.0**. Pinned exactly; `6.x` semver would resolve to a newer SDK. The v6 SDK is async; the example uses `#[tokio::main]`. |
 | groth16-solana | git `43fee1a` | Unreleased master. crates.io 0.2.0 lacks `negate_g1_be`, `vk_commitment`, pinocchio syscalls. |
 | Solana crates | Agave 3.x (`solana-program 3.0`, RPC client 3.1) | |
 | Solana CLI / platform-tools | Agave 4.2 / v1.54 | Anything ≥ 2.x that has the `alt_bn128` syscalls works. |
@@ -77,7 +77,8 @@ SHA-256 pairing failure.
 
 ### Verifying key
 
-`verifier/src/vk.rs` is generated:
+`verifier/src/vk.rs` is generated (and rustfmt-normalised, so regenerating is a no-op unless
+the `.bin` changed):
 
 ```shell
 cargo run -p sp1-solana --example gen_vk
@@ -182,6 +183,13 @@ SP1_PROVER=cuda cargo run --release --features cuda -- --prove --program-id <PRO
 The script refuses to run with `SP1_PROVER=cuda` if the binary was built without the feature.
 To pick a GPU other than device 0, use `ProverClient::builder().cuda().with_device_id(n)` instead
 of `from_env()`.
+
+Verified on an RTX-class desktop: `proved fib(20) in 309.9s` (includes the gnark wrap in Docker and,
+on a first run, the artifact download). The CUDA client keeps a socket to `sp1-gpu-server` whose
+`Drop` uses `tokio::spawn`; the prover client must therefore be created and dropped inside a tokio
+runtime. Do not wrap it with `sp1_sdk::blocking` — that facade runs each call on a temporary
+runtime and the client is dropped outside it, which aborts the process at the end of proving
+(`there is no reactor running`).
 
 > [!NOTE]
 > The proof and public values are passed as instruction data. A transaction is limited to
