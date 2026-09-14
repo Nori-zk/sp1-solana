@@ -6588,6 +6588,7 @@ name = "sp1-solana"
 version = "0.2.0"
 dependencies = [
  "blake3",
+ "borsh",
  "groth16-solana",
  "hex",
  "hex-literal",

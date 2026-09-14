@@ -49,6 +49,17 @@ pub use vk::{GROTH16_VK, GROTH16_VK_HASH_PREFIX, NR_PUBLIC_INPUTS, SP1_CIRCUIT_V
 
 use groth16_solana::groth16::{negate_g1_be, Groth16Verifier};
 
+/// Wire format for an SP1 Groth16 proof, suitable as Borsh-encoded instruction
+/// data for an on-chain program calling [`verify_proof`].
+///
+/// * `proof` - `SP1ProofWithPublicValues::bytes()`
+/// * `sp1_public_inputs` - `SP1ProofWithPublicValues::public_values.to_vec()`
+#[derive(Debug, Clone, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct SP1Groth16Proof {
+    pub proof: Vec<u8>,
+    pub sp1_public_inputs: Vec<u8>,
+}
+
 /// Length of the vk hash prefix SP1 prepends to the proof.
 pub const VK_HASH_PREFIX_LEN: usize = 4;
 /// Length of the raw gnark Groth16 proof (A || B || C, uncompressed BE).

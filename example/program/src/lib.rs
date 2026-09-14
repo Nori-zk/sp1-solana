@@ -5,12 +5,12 @@
 //! read or written; verification is pure computation over the instruction
 //! data and the constants compiled into `sp1-solana`.
 
-use borsh::{BorshDeserialize, BorshSerialize};
+use borsh::BorshDeserialize;
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, msg, program_error::ProgramError,
     pubkey::Pubkey,
 };
-use sp1_solana::{verify_proof, Error};
+use sp1_solana::{verify_proof, Error, SP1Groth16Proof};
 
 #[cfg(not(feature = "no-entrypoint"))]
 solana_program::entrypoint!(process_instruction);
@@ -22,15 +22,6 @@ solana_program::entrypoint!(process_instruction);
 /// this constant before sending anything, and prints the new value to paste.
 pub const FIBONACCI_VKEY_HASH: &str =
     "0x00e8dad83fa005b8aae28d5699cc5be3174e6ef947cf17ecf11ff38cac809dbc";
-
-/// The instruction data for the program.
-#[derive(BorshDeserialize, BorshSerialize, Debug, Clone)]
-pub struct SP1Groth16Proof {
-    /// `SP1ProofWithPublicValues::bytes()` — 356 bytes for SP1 v6.
-    pub proof: Vec<u8>,
-    /// `SP1ProofWithPublicValues::public_values` — the guest's committed bytes.
-    pub sp1_public_inputs: Vec<u8>,
-}
 
 /// Map verifier errors onto distinct custom program error codes so a client
 /// can tell *why* a proof was rejected from the transaction error alone.

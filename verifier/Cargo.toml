@@ -24,6 +24,7 @@ default = []
 blake3 = ["dep:blake3"]
 
 [dependencies]
+borsh = { workspace = true, features = ["derive"] }
 groth16-solana.workspace = true
 thiserror.workspace = true
 hex.workspace = true

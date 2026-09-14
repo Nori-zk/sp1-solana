@@ -28,7 +28,8 @@ use std::{path::PathBuf, str::FromStr};
 
 use borsh::to_vec;
 use clap::Parser;
-use fibonacci_verifier_contract::{SP1Groth16Proof, FIBONACCI_VKEY_HASH};
+use fibonacci_verifier_contract::FIBONACCI_VKEY_HASH;
+use sp1_solana::SP1Groth16Proof;
 use solana_commitment_config::CommitmentConfig;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_instruction::Instruction;
