@@ -1,11 +1,18 @@
 [package]
 name = "fibonacci-verifier-contract"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 publish = false
 
 [lib]
 crate-type = ["cdylib", "lib"]
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = [
+    'cfg(target_os, values("solana"))',
+    'cfg(feature, values("custom-heap", "custom-panic"))',
+]
 
 [features]
 no-entrypoint = []
@@ -16,6 +23,3 @@ default = []
 borsh.workspace = true
 solana-program.workspace = true
 sp1-solana.workspace = true
-sha2.workspace = true
-
-hex-literal = "0.3.1"
